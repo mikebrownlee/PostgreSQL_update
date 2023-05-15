@@ -1,0 +1,78 @@
+#!/bin/bash
+
+set -e # Exit script on error
+
+# Specify old and new PostgreSQL versions
+OLD_PG_VERSION=14
+NEW_PG_VERSION=15
+
+# Update packages and install the new PostgreSQL
+sudo apt-get update
+sudo apt-get install "postgresql-$NEW_PG_VERSION" "postgresql-server-dev-$NEW_PG_VERSION"
+
+# Backup all databases
+sudo -u postgres pg_dumpall > /var/lib/postgresql/backup_before_upgrade.sql
+
+# Check config file differences
+diff "/etc/postgresql/$OLD_PG_VERSION/main/postgresql.conf" "/etc/postgresql/$NEW_PG_VERSION/main/postgresql.conf"
+diff "/etc/postgresql/$OLD_PG_VERSION/main/pg_hba.conf" "/etc/postgresql/$NEW_PG_VERSION/main/pg_hba.conf"
+
+# Stop PostgreSQL service
+sudo systemctl stop postgresql.service
+
+# Check clusters (without changing any data)
+sudo -u postgres /usr/lib/postgresql/$NEW_PG_VERSION/bin/pg_upgrade \
+  --old-datadir="/var/lib/postgresql/$OLD_PG_VERSION/main" \
+  --new-datadir="/var/lib/postgresql/$NEW_PG_VERSION/main" \
+  --old-bindir="/usr/lib/postgresql/$OLD_PG_VERSION/bin" \
+  --new-bindir="/usr/lib/postgresql/$NEW_PG_VERSION/bin" \
+  --old-options "-c config_file=/etc/postgresql/$OLD_PG_VERSION/main/postgresql.conf" \
+  --new-options "-c config_file=/etc/postgresql/$NEW_PG_VERSION/main/postgresql.conf" \
+  --check
+
+# Migrate the data
+sudo -u postgres /usr/lib/postgresql/$NEW_PG_VERSION/bin/pg_upgrade \
+  --old-datadir="/var/lib/postgresql/$OLD_PG_VERSION/main" \
+  --new-datadir="/var/lib/postgresql/$NEW_PG_VERSION/main" \
+  --old-bindir="/usr/lib/postgresql/$OLD_PG_VERSION/bin" \
+  --new-bindir="/usr/lib/postgresql/$NEW_PG_VERSION/bin" \
+  --old-options "-c config_file=/etc/postgresql/$OLD_PG_VERSION/main/postgresql.conf" \
+  --new-options "-c config_file=/etc/postgresql/$NEW_PG_VERSION/main/postgresql.conf"
+
+# Swap the ports for the old and new PostgreSQL versions
+sudo sed -i 's/port = 5432/port = 5433/' "/etc/postgresql/$NEW_PG_VERSION/main/postgresql.conf"
+sudo sed -i 's/port = 5433/port = 5432/' "/etc/postgresql/$OLD_PG_VERSION/main/postgresql.conf"
+
+# Reload PostgreSQL service
+sudo systemctl daemon-reload
+
+# Start PostgreSQL service
+sudo systemctl start postgresql.service
+
+# Check the new PostgreSQL version
+sudo -u postgres psql -c "SELECT version();"
+
+## Run recommended vacuumdb command
+sudo -u postgres /usr/lib/postgresql/$NEW_PG_VERSION/bin/vacuumdb --all --analyze-in-stages
+
+# Check which old PostgreSQL packages are installed
+apt list --installed | grep postgresql
+
+# Purge the old PostgreSQL packages
+sudo apt-get purge "postgresql-$OLD_PG_VERSION" "postgresql-server-dev-$OLD_PG_VERSION"
+
+# Remove the old configuration
+sudo rm -rf "/etc/postgresql/$OLD_PG_VERSION/"
+
+# Make sure the script is available and executable, then you can run it like this:or just run the sudo su - postgress method
+
+# sudo -u postgres /path/to/your/delete_old_cluster.sh
+sudo su - postgres
+
+#Finally, drop the old cluster data.
+
+./delete_old_cluster.sh
+
+# Done
+echo "PostgreSQL upgrade completed successfully."
+
